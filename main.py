@@ -37,7 +37,7 @@ def init_db():
                     )''')
     
     default_settings = {
-        'channels': '',  # এডমিন প্যানেল থেকে সেট করা হবে
+        'channels': '@freeearningksteam,@freeearningsupport2',
         'ref_rate': '5.0',
         'gmail_pass': 'SetPass123',
         'gmail_price': '10.0',
@@ -109,7 +109,7 @@ def force_join_markup():
         ch = ch.strip()
         if ch:
             clean_username = ch.replace("@", "")
-            keyboard.append([{'text': f'📢 Join {ch}', 'url': f'https://t.me/{clean_username}'}])
+            keyboard.append([{'text': f'📢 {ch}', 'url': f'https://t.me/{clean_username}'}])
     keyboard.append([{'text': '✅ Verify (ভেরিফাই)', 'callback_data': 'verify_membership'}])
     return {'inline_keyboard': keyboard}
 
@@ -129,13 +129,6 @@ def main_keyboard(user_id):
 user_states = {}
 
 def handle_update(update):
-    if "chat_join_request" in update:
-        chat_id = update["chat_join_request"]["chat"]["id"]
-        u_id = update["chat_join_request"]["from"]["id"]
-        urllib.request.urlopen(f"{API_URL}approveChatJoinRequest?chat_id={chat_id}&user_id={u_id}")
-        send_message(u_id, "✅ আপনার গ্রুপ জয়েন রিকোয়েস্ট এক্সেপ্ট করা হয়েছে!")
-        return
-
     if "callback_query" in update:
         cb = update["callback_query"]
         cb_data = cb["data"]
@@ -143,9 +136,9 @@ def handle_update(update):
         
         if cb_data == "verify_membership":
             if check_joined(user_id):
-                send_message(user_id, "✅ ভেরিফিকেশন সফল হয়েছে! কাজ শুরু করতে নিচের অপশন নির্বাচন করুন।", main_keyboard(user_id))
+                send_message(user_id, "✅ **ভেরিফিকেশন সফল হয়েছে!**\n\nকাজ শুরু করতে নিচের অপশন নির্বাচন করুন।", main_keyboard(user_id))
             else:
-                send_message(user_id, "❌ আপনি এখনো সবগুলো চ্যানেলে জয়েন করেননি! সবগুলোতে জয়েন করে আবার Verify বাটনে চাপ দিন।")
+                send_message(user_id, "❌ **আপনি এখনো সবগুলো চ্যানেলে জয়েন করেননি!**\n\nসবগুলোতে জয়েন করে আবার Verify বাটনে চাপ দিন।")
             return
 
         if cb_data.startswith("app_gmail_"):
@@ -195,11 +188,11 @@ def handle_update(update):
             if not check_joined(user_id):
                 send_message(chat_id, "⚠️ **বটটি ব্যবহার করতে হলে আপনাকে আমাদের অফিশিয়াল চ্যানেলগুলোতে জয়েন করতে হবে!**\n\nনিচের চ্যানেলগুলোতে জয়েন করে 'Verify' বাটনে ক্লিক করুন।", force_join_markup())
             else:
-                send_message(chat_id, "👋 **Submit Pro** বটে আপনাকে স্বাগতম! কাজ শুরু করতে নিচের অপশন নির্বাচন করুন।", main_keyboard(user_id))
+                send_message(chat_id, "👋 **Submit Pro** বটে আপনাকে স্বাগতম! কাজ শুরু করতে নিচের অপশন নির্বাচন করুন.", main_keyboard(user_id))
             return
 
         if not check_joined(user_id):
-            send_message(chat_id, "⚠️ কাজ শুরু করতে আগে নিচের চ্যানেলগুলোতে জয়েন হয়ে ভেরিফাই করুন!", force_join_markup())
+            send_message(chat_id, "⚠️ **কাজ শুরু করতে আগে নিচের চ্যানেলগুলোতে জয়েন হয়ে ভেরিফাই করুন!**", force_join_markup())
             return
 
         if text == "👤 My Account":
@@ -290,18 +283,6 @@ def handle_update(update):
             chs = text.split(maxsplit=1)[1] if len(text.split()) > 1 else ""
             set_setting('channels', chs)
             send_message(chat_id, f"✅ চ্যানেল আপডেট করা হয়েছে: `{chs}`")
-            return
-
-        if text.startswith("/set_pass") and user_id == ADMIN_ID:
-            new_p = text.split()[1]
-            set_setting('gmail_pass', new_p)
-            send_message(chat_id, f"✅ জিমেইল পাসওয়ার্ড আপডেট করা হয়েছে: `{new_p}`")
-            return
-
-        if text.startswith("/set_gprice") and user_id == ADMIN_ID:
-            gp = text.split()[1]
-            set_setting('gmail_price', gp)
-            send_message(chat_id, f"✅ জিমেইল রেট আপডেট হয়েছে: `{gp}` BDT")
             return
 
 def bot_loop():
