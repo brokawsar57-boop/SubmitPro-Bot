@@ -7,12 +7,10 @@ import time
 from threading import Thread
 from flask import Flask
 
-# --- মৌলিক কনফিগারেশন ---
 BOT_TOKEN = "8882134412:AAHCFAVuRk6h0-oyafS0B_bgOWSln6VqkQs"
-ADMIN_ID = 7699501193  # আপনার দেওয়া টেলিগ্রাম আইডি
+ADMIN_ID = 7699501193
 API_URL = f"https://api.telegram.org/bot{BOT_TOKEN}/"
 
-# --- ২৪ ঘণ্টা সার্ভারে ফ্রিতে চালু রাখার জন্য ফ্ল্যাস্ক ওয়েব সার্ভার ---
 app = Flask(__name__)
 
 @app.route('/')
@@ -23,12 +21,9 @@ def run_web():
     port = int(os.environ.get('PORT', 8080))
     app.run(host='0.0.0.0', port=port)
 
-# --- ডাটাবেজ তৈরি ও সেটিংস ---
 def init_db():
     conn = sqlite3.connect("submit_pro.db")
     cursor = conn.cursor()
-    
-    # ইউজার টেবিল
     cursor.execute('''CREATE TABLE IF NOT EXISTS users (
                         user_id INTEGER PRIMARY KEY,
                         balance REAL DEFAULT 0.0,
@@ -36,21 +31,17 @@ def init_db():
                         referred_by INTEGER,
                         has_worked INTEGER DEFAULT 0
                     )''')
-    
-    # সেটিংস টেবিল
     cursor.execute('''CREATE TABLE IF NOT EXISTS settings (
                         key TEXT PRIMARY KEY,
                         value TEXT
                     )''')
     
     default_settings = {
-        'channels': '@yourchannel1,@yourchannel2',
+        'channels': '',  # এডমিন প্যানেল থেকে সেট করা হবে
         'ref_rate': '5.0',
         'gmail_pass': 'SetPass123',
         'gmail_price': '10.0',
         'min_withdraw': '50.0',
-        'bkash_status': 'ON',
-        'nagad_status': 'ON',
         'video_gmail': 'https://youtube.com',
         'video_review': 'https://youtube.com',
         'review_link': 'https://maps.google.com',
@@ -61,7 +52,6 @@ def init_db():
     
     for key, val in default_settings.items():
         cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", (key, val))
-        
     conn.commit()
     conn.close()
 
@@ -82,7 +72,6 @@ def set_setting(key, val):
     conn.commit()
     conn.close()
 
-# --- টেলিগ্রাম এপিআই হেল্পার ফাংশন ---
 def send_message(chat_id, text, reply_markup=None):
     data = {'chat_id': chat_id, 'text': text, 'parse_mode': 'Markdown'}
     if reply_markup:
@@ -92,6 +81,37 @@ def send_message(chat_id, text, reply_markup=None):
         urllib.request.urlopen(req)
     except Exception as e:
         print(f"Error sending msg: {e}")
+
+def check_joined(user_id):
+    channels = get_setting('channels').split(',')
+    if not channels or channels == ['']:
+        return True
+    
+    for ch in channels:
+        ch = ch.strip()
+        if not ch:
+            continue
+        try:
+            url = f"{API_URL}getChatMember?chat_id={ch}&user_id={user_id}"
+            req = urllib.request.urlopen(url)
+            res = json.loads(req.read().decode('utf-8'))
+            status = res.get("result", {}).get("status", "")
+            if status not in ["member", "administrator", "creator"]:
+                return False
+        except Exception:
+            return False
+    return True
+
+def force_join_markup():
+    channels = get_setting('channels').split(',')
+    keyboard = []
+    for ch in channels:
+        ch = ch.strip()
+        if ch:
+            clean_username = ch.replace("@", "")
+            keyboard.append([{'text': f'📢 Join {ch}', 'url': f'https://t.me/{clean_username}'}])
+    keyboard.append([{'text': '✅ Verify (ভেরিফাই)', 'callback_data': 'verify_membership'}])
+    return {'inline_keyboard': keyboard}
 
 def main_keyboard(user_id):
     kb = {
@@ -106,11 +126,9 @@ def main_keyboard(user_id):
         kb['keyboard'].append([{'text': '⚙️ Admin Panel'}])
     return kb
 
-# --- মেম্বারদের মেসেজ প্রসেসিং ---
 user_states = {}
 
 def handle_update(update):
-    # ১. অটো-অ্যাপ্রুভ জয়েন রিকোয়েস্ট
     if "chat_join_request" in update:
         chat_id = update["chat_join_request"]["chat"]["id"]
         u_id = update["chat_join_request"]["from"]["id"]
@@ -118,52 +136,51 @@ def handle_update(update):
         send_message(u_id, "✅ আপনার গ্রুপ জয়েন রিকোয়েস্ট এক্সেপ্ট করা হয়েছে!")
         return
 
-    # ২. কলব্যাক কোয়েরি (অ্যাপ্রুভ / রিজেক্ট বাটন)
     if "callback_query" in update:
         cb = update["callback_query"]
         cb_data = cb["data"]
+        user_id = cb["from"]["id"]
         
+        if cb_data == "verify_membership":
+            if check_joined(user_id):
+                send_message(user_id, "✅ ভেরিফিকেশন সফল হয়েছে! কাজ শুরু করতে নিচের অপশন নির্বাচন করুন।", main_keyboard(user_id))
+            else:
+                send_message(user_id, "❌ আপনি এখনো সবগুলো চ্যানেলে জয়েন করেননি! সবগুলোতে জয়েন করে আবার Verify বাটনে চাপ দিন।")
+            return
+
         if cb_data.startswith("app_gmail_"):
-            parts = cb_data.split("_")
-            target_user = int(parts[2])
+            target_user = int(cb_data.split("_")[2])
             g_price = float(get_setting('gmail_price'))
             
             conn = sqlite3.connect("submit_pro.db")
             cursor = conn.cursor()
-            
-            # কাজ সম্পন্ন হিসেবে মার্ক ও ব্যালেন্স যোগ
             cursor.execute("UPDATE users SET balance = balance + ?, has_worked = 1 WHERE user_id=?", (g_price, target_user))
             
-            # রেফারেল বোনাস চেক (প্রথম কাজ করলে রেফারকারী বোনাস পাবে)
             cursor.execute("SELECT referred_by, has_worked FROM users WHERE user_id=?", (target_user,))
             row = cursor.fetchone()
             if row and row[0] and row[1] == 0:
                 ref_by = row[0]
                 ref_rate = float(get_setting('ref_rate'))
                 cursor.execute("UPDATE users SET balance = balance + ?, referrals = referrals + 1 WHERE user_id=?", (ref_rate, ref_by))
-                send_message(ref_by, f"🎉 আপনার রেফারেল সফলভাবে একটি কাজ জমা দিয়েছে! আপনার অ্যাকাউন্টে {ref_rate} BDT বোনাস যোগ হয়েছে।")
+                send_message(ref_by, f"🎉 আপনার রেফারেল সফলভাবে একটি কাজ জমা দিয়েছে! অ্যাকাউন্টে {ref_rate} BDT যোগ হয়েছে।")
                 
             conn.commit()
             conn.close()
-            
-            send_message(target_user, f"✅ আপনার জমা দেওয়া **Gmail** এপ্রুভ হয়েছে! {g_price} BDT আপনার ব্যালেন্সে যোগ করা হয়েছে।")
+            send_message(target_user, f"✅ আপনার Gmail এপ্রুভ হয়েছে! {g_price} BDT ব্যালেন্সে যোগ করা হয়েছে।")
             send_message(ADMIN_ID, f"✅ User {target_user}-এর জিমেইল এপ্রুভ করা হয়েছে।")
 
         elif cb_data.startswith("rej_gmail_"):
             target_user = int(cb_data.split("_")[2])
             send_message(target_user, "❌ দুঃখিত! আপনার জমা দেওয়া জিমেইলটি রিজেক্ট করা হয়েছে।")
             send_message(ADMIN_ID, f"❌ User {target_user}-এর জিমেইল রিজেক্ট করা হয়েছে।")
-            
         return
 
-    # ৩. মেসেজ হ্যান্ডলার
     if "message" in update and "text" in update["message"]:
         msg = update["message"]
         chat_id = msg["chat"]["id"]
         user_id = msg["from"]["id"]
         text = msg["text"]
 
-        # স্টার্ট কমান্ড
         if text.startswith("/start"):
             args = text.split()
             conn = sqlite3.connect("submit_pro.db")
@@ -175,17 +192,22 @@ def handle_update(update):
                 conn.commit()
             conn.close()
             
-            send_message(chat_id, "👋 **Submit Pro** বটে আপনাকে স্বাগতম! কাজ শুরু করতে নিচের অপশন নির্বাচন করুন।", main_keyboard(user_id))
+            if not check_joined(user_id):
+                send_message(chat_id, "⚠️ **বটটি ব্যবহার করতে হলে আপনাকে আমাদের অফিশিয়াল চ্যানেলগুলোতে জয়েন করতে হবে!**\n\nনিচের চ্যানেলগুলোতে জয়েন করে 'Verify' বাটনে ক্লিক করুন।", force_join_markup())
+            else:
+                send_message(chat_id, "👋 **Submit Pro** বটে আপনাকে স্বাগতম! কাজ শুরু করতে নিচের অপশন নির্বাচন করুন।", main_keyboard(user_id))
             return
 
-        # মাই অ্যাকাউন্ট ও রেফার
+        if not check_joined(user_id):
+            send_message(chat_id, "⚠️ কাজ শুরু করতে আগে নিচের চ্যানেলগুলোতে জয়েন হয়ে ভেরিফাই করুন!", force_join_markup())
+            return
+
         if text == "👤 My Account":
             conn = sqlite3.connect("submit_pro.db")
             cursor = conn.cursor()
             cursor.execute("SELECT balance, referrals FROM users WHERE user_id=?", (user_id,))
             row = cursor.fetchone()
             conn.close()
-            
             bal = row[0] if row else 0.0
             refs = row[1] if row else 0
             
@@ -193,71 +215,49 @@ def handle_update(update):
             bot_username = bot_info['result']['username']
             ref_link = f"https://t.me/{bot_username}?start={user_id}"
             
-            msg_text = f"👤 **আপনার প্রোফাইল**\n\n💰 ব্যালেন্স: `{bal}` BDT\n👥 মোট সফল রেফার: `{refs}` জন\n\n🔗 **আপনার রেফার লিংক:**\n`{ref_link}`\n\n*(শর্ত: আপনার রেফার করা মেম্বারকে অন্তত ১টি কাজ জমা দিতে হবে, তবেই রেফারের টাকা যোগ হবে।)*"
-            send_message(chat_id, msg_text)
+            send_message(chat_id, f"👤 **আপনার প্রোফাইল**\n\n💰 ব্যালেন্স: `{bal}` BDT\n👥 সফল রেফার: `{refs}` জন\n\n🔗 **রেফার লিংক:**\n`{ref_link}`")
             return
 
-        # জিমেইল সেল অপশন
         if text == "💼 Gmail Sell":
             g_pass = get_setting('gmail_pass')
             g_price = get_setting('gmail_price')
-            
-            msg_text = f"📧 **Gmail Sell Work**\n\n🔑 **পাসওয়ার্ড (ট্যাপ করে কপি করুন):**\n`{g_pass}`\n\n💵 **রেট:** {g_price} BDT\n\nজিমেইল তৈরি হয়ে গেলে আপনার **Gmail Username** এবং **Password** নিচে লিখে পাঠান:"
             user_states[user_id] = "WAITING_GMAIL"
-            send_message(chat_id, msg_text)
+            send_message(chat_id, f"📧 **Gmail Sell Work**\n\n🔑 **পাসওয়ার্ড:** `{g_pass}`\n💵 **রেট:** {g_price} BDT\n\nআপনার **Gmail Username** এবং **Password** নিচে লিখে পাঠান:")
             return
 
-        # জিমেইল সাবমিশন প্রসেস
         if user_states.get(user_id) == "WAITING_GMAIL":
             user_states[user_id] = None
-            gmail_data = text
-            
-            # এডমিনের কাছে নোটিফিকেশন পাঠানো
-            markup = {
-                'inline_keyboard': [[
-                    {'text': '✅ Approve', 'callback_data': f'app_gmail_{user_id}'},
-                    {'text': '❌ Reject', 'callback_data': f'rej_gmail_{user_id}'}
-                ]]
-            }
-            
-            admin_msg = f"📥 **নতুন Gmail জমা পড়েছে!**\n\n👤 ইউজার ID: `{user_id}`\n📝 **তথ্য (কপি করতে ট্যাপ করুন):**\n`{gmail_data}`"
-            send_message(ADMIN_ID, admin_msg, markup)
-            send_message(chat_id, "✅ আপনার জিমেইল সাবমিট হয়েছে! এডমিন দেখে এপ্রুভ করলে ব্যালেন্সে টাকা যোগ হয়ে যাবে।")
+            markup = {'inline_keyboard': [[
+                {'text': '✅ Approve', 'callback_data': f'app_gmail_{user_id}'},
+                {'text': '❌ Reject', 'callback_data': f'rej_gmail_{user_id}'}
+            ]]}
+            send_message(ADMIN_ID, f"📥 **নতুন Gmail জমা পড়েছে!**\n\n👤 ইউজার ID: `{user_id}`\n📝 **তথ্য:**\n`{text}`", markup)
+            send_message(chat_id, "✅ আপনার জিমেইল সাবমিট হয়েছে!")
             return
 
-        # গুগল রিভিউ কাজ
         if text == "⭐ Google Review":
             r_link = get_setting('review_link')
             r_rate = get_setting('review_rate')
             r_limit = int(get_setting('review_limit'))
             r_count = int(get_setting('review_count'))
-            
             if r_count >= r_limit:
-                send_message(chat_id, "❌ এই মুহূর্তের গুগল রিভিউ কাজের লিমিট শেষ হয়ে গেছে! নতুন লিংক আসা পর্যন্ত অপেক্ষা করুন।")
+                send_message(chat_id, "❌ গুগল রিভিউ কাজের লিমিট শেষ হয়ে গেছে!")
             else:
-                msg_text = f"⭐ **Google Review Work**\n\n🔗 **লিংক:** {r_link}\n💵 **রেট:** {r_rate} BDT\n📊 **অবশিষ্ট লিমিট:** {r_limit - r_count} টি\n\nকাজের নিয়ম: ফাইভ স্টার রিভিউ দিয়ে আপনার জিমেইল আইডি ও স্ক্রিনশটের তথ্য নিচে লিখুন:"
-                send_message(chat_id, msg_text)
+                send_message(chat_id, f"⭐ **Google Review Work**\n\n🔗 **লিংক:** {r_link}\n💵 **রেট:** {r_rate} BDT\n\nরিভিউ দিয়ে আপনার তথ্য লিখে পাঠান:")
             return
 
-        # কাজের ভিডিও
         if text == "🎥 কাজের ভিডিও":
-            v_g = get_setting('video_gmail')
-            v_r = get_setting('video_review')
-            send_message(chat_id, f"🎥 **কাজের ভিডিও গাইড:**\n\n1. জিমেইল কাজের ভিডিও: {v_g}\n2. গুগল রিভিউ কাজের ভিডিও: {v_r}")
+            send_message(chat_id, f"🎥 **কাজের ভিডিও গাইড:**\n\n1. জিমেইল কাজ: {get_setting('video_gmail')}\n2. গুগল রিভিউ: {get_setting('video_review')}")
             return
 
-        # উইথড্র সেকশন
         if text == "💳 Withdraw":
             conn = sqlite3.connect("submit_pro.db")
             cursor = conn.cursor()
             cursor.execute("SELECT balance FROM users WHERE user_id=?", (user_id,))
-            row = cursor.fetchone()
-            bal = row[0] if row else 0.0
+            bal = cursor.fetchone()[0]
             conn.close()
-            
-            min_wd = get_setting('min_withdraw')
-            send_message(chat_id, f"💰 আপনার বর্তমান ব্যালেন্স: `{bal}` BDT\n\nসর্বনিম্ন উইথড্র: `{min_wd}` BDT\nপেমেন্ট নিতে আপনার **বিকাশ/নগদ নাম্বার ও টাকার পরিমাণ** পাঠান (যেমন: 01700000000 50):")
             user_states[user_id] = "WAITING_WITHDRAW"
+            send_message(chat_id, f"💰 ব্যালেন্স: `{bal}` BDT\nসর্বনিম্ন উইথড্র: `{get_setting('min_withdraw')}` BDT\n\nনাম্বার ও পরিমাণ পাঠান (যেমন: 01700000000 50):")
             return
 
         if user_states.get(user_id) == "WAITING_WITHDRAW":
@@ -266,29 +266,30 @@ def handle_update(update):
                 parts = text.split()
                 num, amount = parts[0], float(parts[1])
                 min_wd = float(get_setting('min_withdraw'))
-                
                 conn = sqlite3.connect("submit_pro.db")
                 cursor = conn.cursor()
                 cursor.execute("SELECT balance FROM users WHERE user_id=?", (user_id,))
                 bal = cursor.fetchone()[0]
-                
-                if amount < min_wd:
-                    send_message(chat_id, f"❌ সর্বনিম্ন উইথড্র অ্যামাউন্ট {min_wd} BDT।")
-                elif amount > bal:
-                    send_message(chat_id, "❌ আপনার ব্যালেন্সে পর্যাপ্ত টাকা নেই!")
-                else:
+                if amount >= min_wd and amount <= bal:
                     cursor.execute("UPDATE users SET balance = balance - ? WHERE user_id=?", (amount, user_id))
                     conn.commit()
-                    send_message(ADMIN_ID, f"🚨 **নতুন Withdraw Request!**\n\n👤 User: `{user_id}`\n📱 Number: `{num}`\n💵 Amount: {amount} BDT")
-                    send_message(chat_id, "✅ উইথড্র রিকোয়েস্ট পাঠানো হয়েছে। দ্রুত আপনাকে পেমেন্ট করা হবে।")
+                    send_message(ADMIN_ID, f"🚨 **Withdraw Request!**\n\n👤 User: `{user_id}`\n📱 Number: `{num}`\n💵 Amount: {amount} BDT")
+                    send_message(chat_id, "✅ উইথড্র রিকোয়েস্ট সফল হয়েছে।")
+                else:
+                    send_message(chat_id, "❌ অপর্যাপ্ত ব্যালেন্স বা ভুল অ্যামাউন্ট।")
                 conn.close()
             except Exception:
-                send_message(chat_id, "❌ ফরম্যাট সঠিক হয়নি! আবার সঠিকভাবে লিখুন (উদাহরণ: 01700000000 50)।")
+                send_message(chat_id, "❌ ফরম্যাট সঠিক হয়নি।")
             return
 
-        # এডমিন প্যানেল
         if text == "⚙️ Admin Panel" and user_id == ADMIN_ID:
-            send_message(chat_id, "⚙️ **Admin Panel**\n\nএখানে আপনি ডাটাবেজ আপডেট করতে পারবেন।\nউদাহরণ: জিমেইল পাসওয়ার্ড পরিবর্তন করতে ডায়াল করুন:\n`/set_pass newpass123`")
+            send_message(chat_id, "⚙️ **Admin Commands:**\n\n1. চ্যানেল সেটআপ: `/set_channels @ch1,@ch2`\n2. পাসওয়ার্ড সেটআপ: `/set_pass newpass`\n3. জিমেইল রেট: `/set_gprice 10`\n4. রিভিউ লিংক: `/set_rlink url`")
+            return
+
+        if text.startswith("/set_channels") and user_id == ADMIN_ID:
+            chs = text.split(maxsplit=1)[1] if len(text.split()) > 1 else ""
+            set_setting('channels', chs)
+            send_message(chat_id, f"✅ চ্যানেল আপডেট করা হয়েছে: `{chs}`")
             return
 
         if text.startswith("/set_pass") and user_id == ADMIN_ID:
@@ -297,23 +298,24 @@ def handle_update(update):
             send_message(chat_id, f"✅ জিমেইল পাসওয়ার্ড আপডেট করা হয়েছে: `{new_p}`")
             return
 
-# --- বটের প্রধান লুপ ---
+        if text.startswith("/set_gprice") and user_id == ADMIN_ID:
+            gp = text.split()[1]
+            set_setting('gmail_price', gp)
+            send_message(chat_id, f"✅ জিমেইল রেট আপডেট হয়েছে: `{gp}` BDT")
+            return
+
 def bot_loop():
     offset = 0
-    print("Submit Pro Bot is starting...")
     while True:
         try:
             req = urllib.request.urlopen(f"{API_URL}getUpdates?offset={offset}&timeout=10")
             data = json.loads(req.read().decode('utf-8'))
-            
             for result in data.get("result", []):
                 offset = result["update_id"] + 1
                 handle_update(result)
-        except Exception as e:
+        except Exception:
             time.sleep(2)
 
 if __name__ == "__main__":
-    # ফ্ল্যাস্ক ওয়েবসাইট চালু
     Thread(target=run_web).start()
-    # বট লুপ চালু
     bot_loop()
