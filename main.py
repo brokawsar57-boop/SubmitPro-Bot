@@ -16,18 +16,17 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Submit Pro Bot 100% Active & Safe!"
+    return "Submit Pro Bot 100% Active & Fixed!"
 
 def run_web():
     port = int(os.environ.get('PORT', 8080))
     app.run(host='0.0.0.0', port=port)
 
-# Database Setup with Safety Measures
+# Master Database Setup
 def init_db():
     conn = sqlite3.connect("submit_pro.db")
     cursor = conn.cursor()
     
-    # Users Table
     cursor.execute('''CREATE TABLE IF NOT EXISTS users (
                         user_id INTEGER PRIMARY KEY,
                         balance REAL DEFAULT 0.0,
@@ -36,19 +35,16 @@ def init_db():
                         has_worked INTEGER DEFAULT 0
                     )''')
     
-    # Settings Table
     cursor.execute('''CREATE TABLE IF NOT EXISTS settings (
                         key TEXT PRIMARY KEY,
                         value TEXT
                     )''')
     
-    # Comments Pool for Google Review
     cursor.execute('''CREATE TABLE IF NOT EXISTS review_comments (
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
                         comment_text TEXT UNIQUE
                     )''')
 
-    # Support Tickets
     cursor.execute('''CREATE TABLE IF NOT EXISTS support_messages (
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
                         user_id INTEGER,
@@ -81,6 +77,16 @@ def init_db():
     conn.close()
 
 init_db()
+
+def ensure_user(user_id):
+    try:
+        conn = sqlite3.connect("submit_pro.db")
+        cursor = conn.cursor()
+        cursor.execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (user_id,))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"Error ensure_user: {e}")
 
 def get_setting(key):
     try:
@@ -212,6 +218,16 @@ def handle_update(update):
 
             # Admin Category Menus
             if user_id == ADMIN_ID:
+                if cb_data == "adm_main_menu":
+                    adm_kb = {'inline_keyboard': [
+                        [{'text': '📥 Gmail Dashboard', 'callback_data': 'adm_gmail_menu'}],
+                        [{'text': '⭐ Google Review Dashboard', 'callback_data': 'adm_review_menu'}],
+                        [{'text': '💳 Withdraw Dashboard', 'callback_data': 'adm_withdraw_menu'}],
+                        [{'text': '📢 Broadcast (নোটিশ পাঠান)', 'callback_data': 'adm_broadcast'}]
+                    ]}
+                    send_message(user_id, "⚙️ **উন্নত এডমিন কন্ট্রোল প্যানেল**", adm_kb)
+                    return
+
                 if cb_data == "adm_gmail_menu":
                     kb = {'inline_keyboard': [
                         [{'text': '🔄 Toggle Status (ON/OFF)', 'callback_data': 'toggle_gmail_status'}],
@@ -247,7 +263,7 @@ def handle_update(update):
 
                 if cb_data == "adm_add_comments":
                     user_states[user_id] = "WAITING_COMMENT_POOL"
-                    send_message(user_id, "📝 **কমেন্ট পুল যুক্ত করুন:**\n\nএকসাথে একাধিক কমেন্ট পাঠাতে পারেন (প্রতিটি লাইন বা কমা দিয়ে আলাদা করুন):")
+                    send_message(user_id, "📝 **কমেন্ট পুল যুক্ত করুন:**\n\nএকসাথে একাধিক কমেন্ট পাঠাতে পারেন (প্রতিটি লাইন দিয়ে আলাদা করুন):")
                     return
 
                 if cb_data == "adm_withdraw_menu":
@@ -275,7 +291,7 @@ def handle_update(update):
 
                 if cb_data == "adm_broadcast":
                     user_states[user_id] = "WAITING_BROADCAST_MSG"
-                    send_message(user_id, "📢 **সব ইউজারের কাছে নোটিশ/মেসেজ পাঠান:**\n\nআপনার মেসেজটি সুন্দর করে লিখে নিচে পাঠান (লাইভ ক্লাসের লিংক সহ দিতে পারেন):")
+                    send_message(user_id, "📢 **সব ইউজারের কাছে নোটিশ/মেসেজ পাঠান:**\n\nআপনার মেসেজটি নিচে লিখে পাঠান:")
                     return
 
             # User Withdraw Method Trigger
@@ -289,15 +305,18 @@ def handle_update(update):
                 send_message(user_id, f"📲 **{method.upper()} উইথড্র**\n\nআপনার **{method.upper()} নম্বর** এবং **টাকার পরিমাণ** একসাথে লিখে পাঠান।\n\n📌 *উদাহরণ:* `01700000000 50`")
                 return
 
-            # Approvals
+            # Approvals Fix
             if cb_data.startswith("app_gmail_"):
                 target_user = int(cb_data.split("_")[2])
+                ensure_user(target_user)
                 g_price = float(get_setting('gmail_price'))
+                
                 conn = sqlite3.connect("submit_pro.db")
                 cursor = conn.cursor()
                 cursor.execute("UPDATE users SET balance = balance + ? WHERE user_id=?", (g_price, target_user))
                 conn.commit()
                 conn.close()
+                
                 process_referral(target_user)
                 send_message(target_user, f"✅ **অভিনন্দন!**\nআপনার Gmail একসেপ্ট করা হয়েছে। **{g_price} BDT** ব্যালেন্সে যোগ হয়েছে।")
                 send_message(ADMIN_ID, f"✅ Gmail এপ্রুভ করা হয়েছে। (User: `{target_user}`)")
@@ -309,12 +328,15 @@ def handle_update(update):
 
             elif cb_data.startswith("app_rev_"):
                 target_user = int(cb_data.split("_")[2])
+                ensure_user(target_user)
                 r_price = float(get_setting('review_rate'))
+                
                 conn = sqlite3.connect("submit_pro.db")
                 cursor = conn.cursor()
                 cursor.execute("UPDATE users SET balance = balance + ? WHERE user_id=?", (r_price, target_user))
                 conn.commit()
                 conn.close()
+                
                 cur_cnt = int(get_setting('review_count'))
                 set_setting('review_count', str(cur_cnt + 1))
                 process_referral(target_user)
@@ -338,6 +360,8 @@ def handle_update(update):
             chat_id = msg["chat"]["id"]
             user_id = msg["from"]["id"]
             text = msg.get("text", "")
+
+            ensure_user(user_id)
 
             if text.startswith("/start"):
                 user_states[user_id] = None
@@ -424,7 +448,7 @@ def handle_update(update):
             if user_states.get(user_id) == "WAITING_REVIEW_NAME":
                 if text:
                     user_states[user_id] = f"WAITING_REVIEW_PHOTO_{text}"
-                    send_message(chat_id, f"✅ নাম রেকর্ড করা হয়েছে: **{text}**\n\nএখন রিভিউর একটি **Screenshot** ফটো হিসাবে পাঠিয়ে দিন।")
+                    send_message(chat_id, f"✅ নাম রেকর্ড করা হয়েছে: **{text}**\n\nএখন রিভিউর একটি **Screenshot** ফটো হিসাবে বানিয়ে পাঠিয়ে দিন।")
                 return
 
             if "photo" in msg and user_states.get(user_id, "").startswith("WAITING_REVIEW_PHOTO_"):
@@ -480,7 +504,7 @@ def handle_update(update):
 
             if text == "🎧 Support System":
                 user_states[user_id] = "WAITING_SUPPORT_MSG"
-                send_message(chat_id, "🎧 **Help & Support**\n\nআপনার যেকোনো প্রশ্ন বা সমস্যা বিস্তারিত লিখে পাঠান। এডমিন দ্রুত আপনার মেসেজের উত্তর দেবে।")
+                send_message(chat_id, "🎧 **Help & Support**\n\nআপনার প্রশ্ন বা সমস্যা বিস্তারিত লিখে পাঠান। এডমিন রিপ্লাই দেবে।")
                 return
 
             if user_states.get(user_id) == "WAITING_SUPPORT_MSG":
@@ -547,7 +571,6 @@ def handle_update(update):
                     send_message(ADMIN_ID, f"✅ User `{target_u}`-কে উত্তর পাঠানো হয়েছে।")
                     return
 
-                # Text Command Setters
                 if text.startswith("/set_minwd"):
                     val = text.split(maxsplit=1)[1]
                     set_setting('min_withdraw', val)
