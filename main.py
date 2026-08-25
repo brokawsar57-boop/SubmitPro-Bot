@@ -135,19 +135,15 @@ def get_user_stats():
     conn = get_db()
     cursor = conn.cursor()
     
-    # মোট বট স্টার্টকারী ইউজার
     cursor.execute("SELECT COUNT(*) FROM users")
     total_users = cursor.fetchone()[0]
     
-    # যারা কাজ করেছে (has_worked = 1 অথবা logs এ রেকর্ড আছে)
     cursor.execute("SELECT COUNT(DISTINCT user_id) FROM users WHERE has_worked = 1")
     active_workers = cursor.fetchone()[0]
     
-    # মোট জিমেইল কাজ জমা পড়ার সংখ্যা
     cursor.execute("SELECT COUNT(*) FROM logs WHERE type='GMAIL'")
     total_gmail_logs = cursor.fetchone()[0]
     
-    # মোট রিভিউ কাজের সংখ্যা
     cursor.execute("SELECT COUNT(*) FROM logs WHERE type='REVIEW'")
     total_review_logs = cursor.fetchone()[0]
     
@@ -414,7 +410,7 @@ def handle_update(update):
                     send_message(user_id, f"❌ বর্তমানে **{method.upper()}** উইথড্র বন্ধ আছে।")
                     return
                 user_states[user_id] = f"WAITING_WD_DETAILS_{method}"
-                send_message(user_id, f"📲 **{method.upper()} উইথড্র**\n\nআপনার **{method.upper()} নম্বর** এবং **টাকার পরিমাণ** স্পেস দিয়ে লিখুন।\n\n📌 *উদাহরণ:* `01700000000 50`")
+                send_message(user_id, f"📲 **{method.upper()} উইথড্র**\n\nআপনার **{method.upper()} নম্বর** এবং **টাকার পরিমাণ** স্পেস দিয়ে লিখুন。\n\n📌 *উদাহরণ:* `01700000000 50`")
                 return
 
             if cb_data.startswith("app_gmail_"):
@@ -526,4 +522,179 @@ def handle_update(update):
                 user_gmail_drafts[user_id] = updated_draft
                 
                 sub_markup = {'inline_keyboard': [[{'text': '📥 Submit All Gmails', 'callback_data': 'submit_bulk_gmail'}]]}
-                send_message(chat_id, f"📝 **আপনার জিমেইল লিস্ট তৈরি হচ্ছে...**\n\nআপনার লেখাটি নিচে যুক্ত করা হয়েছে। আরও জিমেইল দিতে মেসেজ করুন অথবা জমা দিতে নিচের **Submit** বাটনে চাপ দিন:\n\n```\n{updated_draft}\n
+                
+                draft_msg = "📝 **আপনার জিমেইল লিস্ট তৈরি হচ্ছে...**\n\nআপনার লেখাটি নিচে যুক্ত করা হয়েছে। আরও জিমেইল দিতে মেসেজ করুন অথবা জমা দিতে নিচের **Submit** বাটনে চাপ দিন:\n\n```\n" + updated_draft + "\n```"
+                send_message(chat_id, draft_msg, sub_markup)
+                return
+
+            if user_states.get(user_id) == "WAITING_SUPPORT_MSG":
+                user_states[user_id] = None
+                markup = {'inline_keyboard': [[{'text': '💬 Reply User', 'callback_data': f'reply_supp_{user_id}'}]]}
+                send_message(ADMIN_ID, f"🎧 **নতুন Support Message!**\n\n👤 ID: `{user_id}`\n💬 {text}", markup)
+                send_message(chat_id, "✅ **আপনার সাপোর্ট মেসেজ পাঠানো হয়েছে!** এডমিন শীঘ্রই উত্তর দিবেন。", main_keyboard(user_id))
+                return
+
+            if text == "🎧 Support System":
+                user_states[user_id] = "WAITING_SUPPORT_MSG"
+                send_message(chat_id, "🎧 **Help & Support**\n\nআপনার সমস্যাটি নিচে লিখে আমাদের পাঠান:")
+                return
+
+            if text == "👤 My Account":
+                conn = get_db()
+                cursor = conn.cursor()
+                cursor.execute("SELECT balance, referrals FROM users WHERE user_id=?", (user_id,))
+                row = cursor.fetchone()
+                conn.close()
+                bal = row[0] if row else 0.0
+                refs = row[1] if row else 0
+                
+                bot_info = json.loads(urllib.request.urlopen(API_URL + "getMe").read().decode('utf-8'))
+                ref_link = f"https://t.me/{bot_info['result']['username']}?start={user_id}"
+                
+                send_message(chat_id, f"👤 **আপনার প্রোফাইল**\n\n💰 **ব্যালেন্স:** `{bal}` BDT\n👥 **মোট রেফার:** `{refs}` জন\n\n🔗 **রেফার লিংক:**\n`{ref_link}`")
+                return
+
+            if text == "⭐ Google Review":
+                if get_setting('review_status') == "OFF":
+                    send_message(chat_id, "❌ বর্তমানে গুগল রিভিউর কাজ বন্ধ রয়েছে।")
+                    return
+                r_link = get_setting('review_link')
+                r_rate = get_setting('review_rate')
+                r_limit = int(get_setting('review_limit'))
+                r_count = int(get_setting('review_count'))
+                
+                if r_count >= r_limit:
+                    send_message(chat_id, "❌ গুগল রিভিউর দৈনিক লিমিট শেষ হয়ে গেছে!")
+                else:
+                    user_states[user_id] = "WAITING_REVIEW_NAME"
+                    suggested_comment = get_random_comment()
+                    send_message(chat_id, f"⭐ **Google Review Work**\n\n🔗 **লিংক:** {r_link}\n💵 **রেট:** {r_rate} BDT\n\n💬 **কমেন্ট কপি করুন:**\n`{suggested_comment}`\n\nআপনার **Google Account Name** লিখে পাঠান:")
+                return
+
+            if user_states.get(user_id) == "WAITING_REVIEW_NAME":
+                if text:
+                    user_states[user_id] = f"WAITING_REVIEW_PHOTO_{text}"
+                    send_message(chat_id, f"✅ নাম রেকর্ড করা হয়েছে: **{text}**\n\nএখন রিভিউর একটি **Screenshot** ফটো হিসাবে পাঠান।")
+                return
+
+            if "photo" in msg and user_states.get(user_id, "").startswith("WAITING_REVIEW_PHOTO_"):
+                google_name = user_states[user_id].replace("WAITING_REVIEW_PHOTO_", "")
+                photo_id = msg["photo"][-1]["file_id"]
+                user_states[user_id] = None
+                add_log(user_id, "REVIEW", f"Name: {google_name}", "PENDING")
+                markup = {'inline_keyboard': [[
+                    {'text': '✅ Approve', 'callback_data': f'app_rev_{user_id}'},
+                    {'text': '❌ Reject', 'callback_data': f'rej_rev_{user_id}'}
+                ]]}
+                send_photo(ADMIN_ID, photo_id, f"⭐ **নতুন Google Review!**\n\n👤 ID: `{user_id}`\n📛 গুগল নাম: **{google_name}**", markup)
+                send_message(chat_id, "✅ **আপনার রিভিউ জমা নেওয়া হয়েছে!**", main_keyboard(user_id))
+                return
+
+            if text == "💳 Withdraw":
+                conn = get_db()
+                cursor = conn.cursor()
+                cursor.execute("SELECT balance FROM users WHERE user_id=?", (user_id,))
+                bal = cursor.fetchone()[0]
+                conn.close()
+                wd_markup = {'inline_keyboard': [
+                    [{'text': 'Bkash (বিকাশ)', 'callback_data': 'wd_method_bkash'},
+                     {'text': 'Nagad (নগদ)', 'callback_data': 'wd_method_nagad'}]
+                ]}
+                send_message(chat_id, f"💰 **ব্যালেন্স:** `{bal}` BDT\nসর্বনিম্ন উইথড্র: `{get_setting('min_withdraw')}` BDT\n\nমেথড বেছে নিন:", wd_markup)
+                return
+
+            state = user_states.get(user_id, "")
+            if state.startswith("WAITING_WD_DETAILS_"):
+                method = state.replace("WAITING_WD_DETAILS_", "").upper()
+                try:
+                    parts = text.split()
+                    num, amount = parts[0], float(parts[1])
+                    min_wd = float(get_setting('min_withdraw'))
+                    conn = get_db()
+                    cursor = conn.cursor()
+                    cursor.execute("SELECT balance FROM users WHERE user_id=?", (user_id,))
+                    bal = cursor.fetchone()[0]
+                    if amount < min_wd:
+                        send_message(chat_id, f"❌ সর্বনিম্ন উইথড্র `{min_wd}` BDT।")
+                    elif amount > bal:
+                        send_message(chat_id, "❌ পর্যাপ্ত ব্যালেন্স নেই।")
+                    else:
+                        cursor.execute("UPDATE users SET balance = balance - ? WHERE user_id=?", (amount, user_id))
+                        conn.commit()
+                        user_states[user_id] = None
+                        add_log(user_id, "WITHDRAW", f"{method}: {num} - {amount} BDT", "PENDING")
+                        send_message(ADMIN_ID, f"🚨 **Withdraw Request!**\n\n👤 ID: `{user_id}`\n💳 মেথড: **{method}**\n📱 নম্বর: `{num}`\n💵 পরিমাণ: **{amount} BDT**")
+                        send_message(chat_id, f"✅ **{method} উইথড্র জমা হয়েছে!**", main_keyboard(user_id))
+                    conn.close()
+                except Exception:
+                    send_message(chat_id, "❌ **ফরম্যাট ভুল!** উদাহরণ: `01700000000 50`")
+                return
+
+            if text == "🎥 কাজের ভিডিও":
+                send_message(chat_id, f"🎥 **কাজের ভিডিও গাইড:**\n\n1. জিমেইল কাজ: {get_setting('video_gmail')}\n2. গুগল রিভিউ: {get_setting('video_review')}")
+                return
+
+            if text == "⚙️ Admin Panel" and user_id == ADMIN_ID:
+                send_message(chat_id, "⚙️ **এডমিন কন্ট্রোল ড্যাশবোর্ড**", get_admin_menu_markup())
+                return
+
+            if user_id == ADMIN_ID:
+                if user_states.get(user_id) == "WAITING_COMMENT_POOL":
+                    user_states[user_id] = None
+                    comments = text.split('\n')
+                    conn = get_db()
+                    cursor = conn.cursor()
+                    for c in comments:
+                        c = c.strip()
+                        if c:
+                            cursor.execute("INSERT OR IGNORE INTO review_comments (comment_text) VALUES (?)", (c,))
+                    conn.commit()
+                    conn.close()
+                    send_message(ADMIN_ID, "✅ **কমেন্ট পুল যুক্ত করা হয়েছে!**")
+                    return
+
+                if user_states.get(user_id) == "WAITING_BROADCAST_MSG":
+                    user_states[user_id] = None
+                    conn = get_db()
+                    cursor = conn.cursor()
+                    cursor.execute("SELECT user_id FROM users")
+                    users = cursor.fetchall()
+                    conn.close()
+                    
+                    count = 0
+                    for u in users:
+                        try:
+                            send_message(u[0], f"📢 **অফিশিয়াল নোটিশ**\n\n{text}")
+                            count += 1
+                            time.sleep(0.05)
+                        except Exception:
+                            pass
+                    send_message(ADMIN_ID, f"✅ **ব্রডকাস্ট সম্পন্ন!** `{count}` জন ইউজারের কাছে পৌঁছেছে।")
+                    return
+
+                state = user_states.get(user_id, "")
+                if state.startswith("WAITING_SUPP_REPLY_"):
+                    target_u = int(state.replace("WAITING_SUPP_REPLY_", ""))
+                    user_states[user_id] = None
+                    send_message(target_u, f"🎧 **এডমিন রিপ্লাই:**\n\n{text}")
+                    send_message(ADMIN_ID, f"✅ User `{target_u}`-কে রিপ্লাই পাঠানো হয়েছে।")
+                    return
+
+    except Exception as e:
+        print(f"Error handling update: {e}")
+
+def bot_loop():
+    offset = 0
+    while True:
+        try:
+            req = urllib.request.Request(f"{API_URL}getUpdates?offset={offset}&timeout=10")
+            data = json.loads(urllib.request.urlopen(req).read().decode('utf-8'))
+            for result in data.get("result", []):
+                offset = result["update_id"] + 1
+                handle_update(result)
+        except Exception as e:
+            time.sleep(2)
+
+if __name__ == "__main__":
+    Thread(target=run_web).start()
+    bot_loop()
